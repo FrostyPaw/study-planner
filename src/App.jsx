@@ -1,4 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import {
+  filterTasks, formatMinutes, isOverdue, loadTasks, localDate,
+  saveTasks, taskSummary, validDeadline,
+} from './taskUtils.js'
 import './App.css'
 
 const emptyForm = { title: '', subject: '', deadline: '', minutes: '45' }
@@ -9,12 +13,58 @@ function formatDeadline(value) {
   }).format(new Date(`${value}T00:00:00`))
 }
 
+function readInitialTasks() {
+  try {
+    return { tasks: loadTasks(window.localStorage), blocked: false }
+  } catch {
+    // Keep unreadable saved data instead of overwriting it.
+    return { tasks: [], blocked: true }
+  }
+}
+
 function App() {
   // Form values and the task list are separate pieces of React state.
   const [form, setForm] = useState(emptyForm)
-  const [tasks, setTasks] = useState([])
+  const [initialData] = useState(readInitialTasks)
+  const [tasks, setTasks] = useState(initialData.tasks)
+  const [filter, setFilter] = useState('all')
+  const [today, setToday] = useState(localDate)
+  const [saveError, setSaveError] = useState('')
   const [formError, setFormError] = useState('')
   const [announcement, setAnnouncement] = useState('')
+
+  // Refresh overdue badges when the date changes or the window regains focus.
+  useEffect(() => {
+    const refreshDate = () => setToday(localDate())
+    const interval = window.setInterval(refreshDate, 60000)
+    window.addEventListener('focus', refreshDate)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshDate)
+    }
+  }, [])
+
+  const summary = taskSummary(tasks, today)
+  const visibleTasks = filterTasks(tasks, filter)
+  const storageMessage = initialData.blocked
+    ? 'Saved tasks could not be read. This list will not be saved; existing data was kept.'
+    : saveError
+  const filters = [
+    { value: 'all', label: 'All', count: tasks.length },
+    { value: 'active', label: 'Active', count: summary.active },
+    { value: 'completed', label: 'Completed', count: summary.completed },
+  ]
+
+  function updateTasks(nextTasks) {
+    setTasks(nextTasks)
+    if (initialData.blocked) return
+    try {
+      saveTasks(window.localStorage, nextTasks)
+      setSaveError('')
+    } catch {
+      setSaveError('Could not save. Keep this page open.')
+    }
+  }
 
   function updateForm(event) {
     const { name, value } = event.target
@@ -28,7 +78,7 @@ function App() {
     const subject = form.subject.trim()
     const minutes = Number(form.minutes)
 
-    if (!title || !subject || !form.deadline) {
+    if (!title || !subject || !validDeadline(form.deadline)) {
       setFormError('Enter a task title, subject and deadline.')
       return
     }
@@ -45,7 +95,8 @@ function App() {
       minutes,
       completed: false,
     }
-    setTasks((current) => [...current, newTask])
+    updateTasks([...tasks, newTask])
+    setFilter('all')
     setForm(emptyForm)
     setFormError('')
     setAnnouncement(`Added: ${title}.`)
@@ -53,14 +104,14 @@ function App() {
 
   function toggleTask(id) {
     // map creates an updated list without changing the existing state.
-    setTasks((current) => current.map((task) => (
+    updateTasks(tasks.map((task) => (
       task.id === id ? { ...task, completed: !task.completed } : task
     )))
     setAnnouncement('Task status updated.')
   }
 
   function deleteTask(id) {
-    setTasks((current) => current.filter((task) => task.id !== id))
+    updateTasks(tasks.filter((task) => task.id !== id))
     setAnnouncement('Task removed.')
   }
 
@@ -82,6 +133,22 @@ function App() {
             <p className="intro-description">Keep each assignment with its subject, deadline and time estimate.</p>
           </div>
           <p className="intro-note"><strong>Start with one task.</strong> Give it a clear deadline and a realistic amount of study time.</p>
+        </section>
+
+        <section className="workload-summary" aria-label="Study workload">
+          <div>
+            <span className="summary-label">Active assignments</span>
+            <strong>{summary.active}</strong>
+          </div>
+          <div>
+            <span className="summary-label">Estimated time left</span>
+            <strong>{formatMinutes(summary.minutes)}</strong>
+          </div>
+          <div className={summary.overdue > 0 ? 'summary-overdue' : ''}>
+            <span className="summary-label">Overdue assignments</span>
+            <strong>{summary.overdue}</strong>
+          </div>
+          <p>Time left includes all active assignments.</p>
         </section>
 
         <div className="workspace">
@@ -106,7 +173,7 @@ function App() {
                     onChange={updateForm} required />
                 </div>
                 <div>
-                  <label htmlFor="task-minutes">Time, in minutes</label>
+                  <label htmlFor="task-minutes">Estimated time (min)</label>
                   <input id="task-minutes" name="minutes" type="number" value={form.minutes}
                     onChange={updateForm} min="5" max="600" step="1" aria-describedby="time-hint" required />
                 </div>
@@ -123,25 +190,42 @@ function App() {
                 <span className="section-number" aria-hidden="true">02</span>
                 <h2 id="task-list-title">Your assignments</h2>
               </div>
-              <span className="task-count">{tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}</span>
+              <span className="task-count">
+                {filter !== 'all' && visibleTasks.length + ' of '}
+                {tasks.length} {tasks.length === 1 ? 'task' : 'tasks'}
+              </span>
             </div>
 
-            {tasks.length === 0 ? (
+            <div className="task-filters" role="group" aria-label="Filter assignments">
+              {filters.map((item) => (
+                <button key={item.value} type="button" className="filter-button"
+                  aria-pressed={filter === item.value} onClick={() => setFilter(item.value)}>
+                  {item.label}<span aria-hidden="true">{item.count}</span>
+                </button>
+              ))}
+            </div>
+
+            {visibleTasks.length === 0 ? (
               <div className="empty-state">
                 <span className="empty-symbol" aria-hidden="true">✓</span>
-                <h3>Your list starts here</h3>
-                <p>Add your first assignment using the form.<br />Each task will have a deadline and a time estimate.</p>
+                <h3>{tasks.length === 0 ? 'Your list starts here'
+                  : filter === 'completed' ? 'No completed assignments yet' : 'No active assignments'}</h3>
+                <p>{tasks.length === 0 ? 'Add your first assignment using the form.'
+                  : filter === 'completed' ? 'Tick an assignment when you finish it.'
+                    : 'All your assignments are completed. Add a new task when you need one.'}</p>
               </div>
             ) : (
               <ul className="task-list">
-                {tasks.map((task) => (
-                  <li key={task.id} className={`task-item${task.completed ? ' is-complete' : ''}`}>
+                {visibleTasks.map((task) => (
+                  <li key={task.id} className={'task-item' + (task.completed ? ' is-complete' : '')
+                    + (isOverdue(task, today) ? ' is-overdue' : '')}>
                     <input className="task-checkbox" type="checkbox" checked={task.completed}
                       onChange={() => toggleTask(task.id)} aria-label={`Mark ${task.title} as ${task.completed ? 'active' : 'completed'}`} />
                     <div className="task-content">
                       <div className="task-labels">
                         <span className="subject-label">{task.subject}</span>
                         {task.completed && <span className="completed-label">Completed</span>}
+                        {isOverdue(task, today) && <span className="overdue-label">Overdue</span>}
                       </div>
                       <h3>{task.title}</h3>
                       <p className="task-details">
@@ -155,7 +239,13 @@ function App() {
                 ))}
               </ul>
             )}
-            <p className="list-note">Tick a task when it is done. Keep the rest ready for your next study session.</p>
+            <div className="list-note">
+              <span>Tick a task when it is done.</span>
+              <span className={storageMessage ? 'save-status save-error' : 'save-status'}
+                role={storageMessage ? 'alert' : undefined}>
+                {storageMessage || 'Saved automatically in this browser'}
+              </span>
+            </div>
           </section>
         </div>
         <p className="screen-reader-only" role="status" aria-live="polite">{announcement}</p>
