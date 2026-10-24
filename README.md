@@ -83,7 +83,7 @@ Version numbers use MAJOR.MINOR.PATCH: a major version for incompatible changes,
 
 ## Development and references
 
-The project began with the official Vite React starter. AI assistance was used for explanations, code drafts and debugging. The changes were applied and checked locally in stages recorded by the Git history.
+The project is based on the official Vite React starter. Features were implemented and tested incrementally, with changes recorded in the Git history.
 
 - [React documentation](https://react.dev/learn)
 - [Vite documentation](https://vite.dev/guide/)
